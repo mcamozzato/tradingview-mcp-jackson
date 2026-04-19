@@ -79,8 +79,23 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('data_get_study_values', 'Get current indicator values from the data window for all visible studies (RSI, MACD, Bollinger Bands, EMAs, custom indicators with plot()).', {}, async () => {
+  server.tool('data_get_study_values', 'Get current indicator values from the data window for all visible studies (RSI, MACD, Bollinger Bands, EMAs, custom indicators with plot()). Returns both values[] (positional slot array with color) and values{} (dict keyed by title — legacy).', {}, async () => {
     try { return jsonResult(await core.getStudyValues()); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('data_get_study_history', "Read the last N bars of a study's plot outputs. Returns history: [[time, v0, v1, ...], ...]. Use entity_id from chart_get_state.", {
+    entity_id: z.string().describe('Study entity ID (from chart_get_state)'),
+    count: z.coerce.number().optional().describe('Number of bars to retrieve (default 20, max 500)'),
+  }, async ({ entity_id, count }) => {
+    try { return jsonResult(await core.getStudyHistory({ entity_id, count })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('data_probe_study_internals', 'Diagnostic: dump study object keys and probe common history-access paths. Use when debugging data_get_study_history failures.', {
+    entity_id: z.string().describe('Study entity ID (from chart_get_state)'),
+  }, async ({ entity_id }) => {
+    try { return jsonResult(await core.probeStudyInternals({ entity_id })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 }

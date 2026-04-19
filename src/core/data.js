@@ -336,25 +336,173 @@ export async function getStudyValues() {
           var name = meta.description || meta.shortDescription || '';
           if (!name) continue;
           var values = {};
+          var items_out = [];
           try {
+            var entity_id = (s.id && typeof s.id === 'function') ? s.id() : null;
             var dwv = s.dataWindowView();
             if (dwv) {
               var items = dwv.items();
               if (items) {
                 for (var i = 0; i < items.length; i++) {
                   var item = items[i];
-                  if (item._value && item._value !== '∅' && item._title) values[item._title] = item._value;
+                  var title = item._title || '';
+                  var value = item._value;
+                  // Grab color from the plot's live color if exposed.
+                  var color = null;
+                  try {
+                    if (item._color != null) color = item._color;
+                    else if (item.color != null) color = item.color;
+                    else if (item._plotInfo && item._plotInfo.color != null) color = item._plotInfo.color;
+                    else if (item._valuesProvider && item._valuesProvider.color != null) color = item._valuesProvider.color;
+                  } catch(e) {}
+                  items_out.push({
+                    index: i,
+                    title: title,
+                    value: value,
+                    color: color,
+                    is_empty: (value === '∅' || value == null || value === ''),
+                  });
+                  // Legacy dict — last-writer-wins on duplicate titles, kept
+                  // for back-compat with callers that don't use items[].
+                  if (value && value !== '∅' && title) values[title] = value;
                 }
               }
             }
+            if (items_out.length > 0 || Object.keys(values).length > 0) {
+              results.push({
+                name: name,
+                entity_id: entity_id,
+                values: values,
+                items: items_out,
+              });
+            }
           } catch(e) {}
-          if (Object.keys(values).length > 0) results.push({ name: name, values: values });
         } catch(e) {}
       }
       return results;
     })()
   `);
   return { success: true, study_count: data?.length || 0, studies: data || [] };
+}
+
+// Probe a single study object: dump its top-level property/method names so
+// callers can discover the right path for history / series access. Safe to
+// remove once getStudyHistory is stable.
+export async function probeStudyInternals({ entity_id }) {
+  const data = await evaluate(`
+    (function() {
+      var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+      var sources = chart.model().model().dataSources();
+      var target = null;
+      for (var i = 0; i < sources.length; i++) {
+        var s = sources[i];
+        try {
+          if (s.id && typeof s.id === 'function' && s.id() === '${entity_id}') {
+            target = s; break;
+          }
+        } catch(e) {}
+      }
+      if (!target) return { error: 'study not found' };
+      var top = [];
+      for (var k in target) {
+        try {
+          var val = target[k];
+          var type = typeof val;
+          top.push({ key: k, type: type, is_fn: type === 'function' });
+          if (top.length > 200) break;
+        } catch(e) {}
+      }
+      // Probe common shapes
+      var probes = {};
+      var tryFn = function(label, fn) {
+        try {
+          var r = fn();
+          probes[label] = {
+            ok: true,
+            type: typeof r,
+            has_valueAt: r && typeof r.valueAt === 'function',
+            has_lastIndex: r && typeof r.lastIndex === 'function',
+            has_firstIndex: r && typeof r.firstIndex === 'function',
+            has_size: r && typeof r.size === 'function',
+            has_bars: r && typeof r.bars === 'function',
+          };
+        } catch(e) {
+          probes[label] = { ok: false, error: e.message };
+        }
+      };
+      tryFn('target.bars()', function() { return target.bars && target.bars(); });
+      tryFn('target.data()', function() { return target.data && target.data(); });
+      tryFn('target.priceSource()', function() { return target.priceSource && target.priceSource(); });
+      tryFn('target.priceSource().bars()', function() { var p = target.priceSource && target.priceSource(); return p && p.bars && p.bars(); });
+      tryFn('target.nsStudy()', function() { return target.nsStudy && target.nsStudy(); });
+      tryFn('target.nsStudy().data()', function() { var n = target.nsStudy && target.nsStudy(); return n && n.data && n.data(); });
+      tryFn('target.series()', function() { return target.series && target.series(); });
+      return { error: null, top_keys: top, probes: probes };
+    })()
+  `);
+  if (data && data.error) throw new Error(data.error);
+  return { success: true, ...data };
+}
+
+// Read the last N bars of a study's plot outputs.
+// Tries multiple internal paths and returns the first one that yields a
+// valueAt()-capable bars source. Returns {history: [[time, v0, v1, ...], ...]}.
+export async function getStudyHistory({ entity_id, count = 20 } = {}) {
+  const limit = Math.min(Math.max(1, count | 0), MAX_OHLCV_BARS);
+  const data = await evaluate(`
+    (function() {
+      var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+      var sources = chart.model().model().dataSources();
+      var target = null;
+      for (var i = 0; i < sources.length; i++) {
+        var s = sources[i];
+        try {
+          if (s.id && typeof s.id === 'function' && s.id() === '${entity_id}') {
+            target = s; break;
+          }
+        } catch(e) {}
+      }
+      if (!target) return { error: 'study not found' };
+
+      var tried = [];
+      var getBars = function(fn, label) {
+        try {
+          var b = fn();
+          if (b && typeof b.valueAt === 'function' && typeof b.lastIndex === 'function') {
+            return { bars: b, label: label };
+          }
+          tried.push(label + ' missing interface');
+        } catch(e) { tried.push(label + ' threw: ' + e.message); }
+        return null;
+      };
+
+      var hit =
+        getBars(function(){ return target.bars && target.bars(); }, 'target.bars()')
+        || getBars(function(){ return target.data && target.data(); }, 'target.data()')
+        || getBars(function(){ var p = target.priceSource && target.priceSource(); return p && p.bars && p.bars(); }, 'priceSource().bars()')
+        || getBars(function(){ var n = target.nsStudy && target.nsStudy(); return n && n.data && n.data(); }, 'nsStudy().data()');
+
+      if (!hit) return { error: 'no history source', tried: tried };
+
+      var bars = hit.bars;
+      var end = bars.lastIndex();
+      var start = Math.max(bars.firstIndex(), end - ${limit} + 1);
+      var result = [];
+      for (var i = start; i <= end; i++) {
+        var v = bars.valueAt(i);
+        if (v == null) continue;
+        if (Array.isArray(v)) result.push(v);
+        else result.push([i, v]);
+      }
+      return { success: true, source: hit.label, tried: tried, count: result.length, history: result };
+    })()
+  `);
+  if (data && data.error) {
+    throw new Error(
+      data.error + (data.tried ? ' | tried: ' + JSON.stringify(data.tried) : '')
+    );
+  }
+  return data;
 }
 
 export async function getPineLines({ study_filter, verbose } = {}) {
