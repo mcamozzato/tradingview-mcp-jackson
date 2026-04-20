@@ -71,9 +71,30 @@ export async function stop() {
     try { await evaluate(`${rp}.hideReplayToolbar()`); } catch {}
     return { success: true, action: 'already_stopped' };
   }
+
   await evaluate(`${rp}.stopReplay()`);
   try { await evaluate(`${rp}.hideReplayToolbar()`); } catch {}
-  return { success: true, action: 'replay_stopped' };
+
+  // Poll until TV actually exits replay mode — stopReplay() returns
+  // before the chart's internal state finishes transitioning. Without
+  // this wait, the next get_study_values call returns stale replay
+  // colors and the chart can end up in a half-stopped state that hangs
+  // subsequent set_timeframe / set_symbol calls.
+  const deadline = Date.now() + 6000;
+  let confirmedStopped = false;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 200));
+    const stillStarted = await evaluate(wv(`${rp}.isReplayStarted()`));
+    if (!stillStarted) { confirmedStopped = true; break; }
+  }
+  // Extra settle time for studies to re-evaluate on the live bar.
+  await new Promise(r => setTimeout(r, 500));
+
+  return {
+    success: true,
+    action: 'replay_stopped',
+    confirmed_stopped: confirmedStopped,
+  };
 }
 
 export async function trade({ action }) {
