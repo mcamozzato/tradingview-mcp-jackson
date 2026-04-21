@@ -92,6 +92,14 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('data_get_study_values_history', "Read the rendered Data-Window values for N historical bars of a study, including plotchar/plotshape outputs (B/T/R signals etc) that data_get_study_history cannot surface. Returns bars: [{bar_index, time, items: [{title, value, color, visible}]}]. No replay mode needed.", {
+    entity_id: z.string().describe('Study entity ID (from chart_get_state)'),
+    count: z.coerce.number().optional().describe('Number of most-recent bars to retrieve (default 50, max 500)'),
+  }, async ({ entity_id, count }) => {
+    try { return jsonResult(await core.getStudyValuesHistory({ entity_id, count })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('data_probe_study_internals', 'Diagnostic: dump study object keys and probe common history-access paths. Use when debugging data_get_study_history failures.', {
     entity_id: z.string().describe('Study entity ID (from chart_get_state)'),
   }, async ({ entity_id }) => {

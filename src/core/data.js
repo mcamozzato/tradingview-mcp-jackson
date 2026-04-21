@@ -505,6 +505,86 @@ export async function getStudyHistory({ entity_id, count = 20 } = {}) {
   return data;
 }
 
+// Read the rendered Data-Window values for N historical bars of a study
+// WITHOUT entering replay mode. Uses the internal
+// target.dataWindowView()._valueProvider.getValues(barIndex) path which
+// reflects the fully-rendered chart state (incl. plotchar/plotshape
+// outputs that never surface through target.data().valueAt()).
+//
+// Returns: {
+//   success: true,
+//   study: {name, entity_id},
+//   bar_count: N,
+//   bars: [{bar_index, time, items: [{title,value,color,visible}, ...]}, ...]
+// }
+//
+// The `count` param controls how many of the most recent bars to include.
+// For a sparse set use data_get_study_values_at_bars with explicit indices.
+export async function getStudyValuesHistory({ entity_id, count = 50 } = {}) {
+  const limit = Math.min(Math.max(1, count | 0), MAX_OHLCV_BARS);
+  const data = await evaluate(`
+    (function() {
+      var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+      var sources = chart.model().model().dataSources();
+      var target = null;
+      for (var i = 0; i < sources.length; i++) {
+        var s = sources[i];
+        try {
+          if (s.id && typeof s.id === 'function' && s.id() === '${entity_id}') {
+            target = s; break;
+          }
+        } catch(e) {}
+      }
+      if (!target) return { error: 'study not found' };
+      var dwv, vp;
+      try { dwv = target.dataWindowView(); vp = dwv && dwv._valueProvider; }
+      catch(e) { return { error: 'no dataWindowView' }; }
+      if (!vp || typeof vp.getValues !== 'function') return { error: 'no valueProvider.getValues' };
+      var bars = target.data && target.data();
+      if (!bars || typeof bars.valueAt !== 'function') return { error: 'no target.data()' };
+      var end = bars.lastIndex();
+      var start = Math.max(bars.firstIndex(), end - ${limit} + 1);
+      var out = [];
+      for (var i = start; i <= end; i++) {
+        var v = bars.valueAt(i);
+        if (!v) continue;
+        var t = v[0];
+        var items;
+        try { items = vp.getValues(i); } catch(e) { items = [{ error: e.message }]; }
+        // Normalize: keep only the fields we care about
+        var clean = [];
+        if (Array.isArray(items)) {
+          for (var k = 0; k < items.length; k++) {
+            var it = items[k] || {};
+            clean.push({
+              index: it.index,
+              order: it.orderIndex,
+              title: it.title || '',
+              value: it.value == null ? null : String(it.value),
+              color: it.color || null,
+              visible: it.visible,
+            });
+          }
+        }
+        out.push({ bar_index: i, time: t, items: clean });
+      }
+      var meta;
+      try { meta = target.metaInfo && target.metaInfo(); } catch(e) {}
+      return {
+        success: true,
+        study: {
+          entity_id: '${entity_id}',
+          name: (meta && (meta.description || meta.shortDescription)) || null,
+        },
+        bar_count: out.length,
+        bars: out,
+      };
+    })()
+  `);
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
 export async function getPineLines({ study_filter, verbose } = {}) {
   const filter = study_filter || '';
   const raw = await evaluate(buildGraphicsJS('dwglines', 'lines', filter));
