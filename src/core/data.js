@@ -505,6 +505,46 @@ export async function getStudyHistory({ entity_id, count = 20 } = {}) {
   return data;
 }
 
+// Return per-plot metadata (index, id, type, title) for a study from its
+// metaInfo. Unlike getStudyValues (data-window/visible plots only), this
+// exposes ALL outputs — including `alertcondition` and `chars` plots that
+// carry signal titles like "Local Bottom" / "Potential Bullish Reversal".
+// The `index` is the positional column in getStudyHistory's history rows
+// (v0..vN), so callers can map a title to its raw column deterministically.
+export async function getStudyPlotMeta({ entity_id } = {}) {
+  const data = await evaluate(`
+    (function() {
+      var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+      var sources = chart.model().model().dataSources();
+      var target = null;
+      for (var i = 0; i < sources.length; i++) {
+        var s = sources[i];
+        try {
+          if (s.id && typeof s.id === 'function' && s.id() === '${entity_id}') { target = s; break; }
+        } catch(e) {}
+      }
+      if (!target) return { error: 'study not found' };
+      var mi; try { mi = target.metaInfo(); } catch(e) { return { error: 'no metaInfo: ' + e.message }; }
+      var styles = mi.styles || {};
+      var out = [];
+      (mi.plots || []).forEach(function(p, idx) {
+        var st = styles[p.id] || {};
+        out.push({
+          index: idx,
+          id: p.id,
+          type: p.type,
+          title: (st.title != null ? st.title : null),
+          isHidden: !!st.isHidden,
+        });
+      });
+      var name = null; try { name = mi.description; } catch(e) {}
+      return { success: true, study: { entity_id: '${entity_id}', name: name }, plots: out };
+    })()
+  `);
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
 // Read the rendered Data-Window values for N historical bars of a study
 // WITHOUT entering replay mode. Uses the internal
 // target.dataWindowView()._valueProvider.getValues(barIndex) path which

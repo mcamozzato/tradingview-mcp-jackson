@@ -106,4 +106,11 @@ export function registerDataTools(server) {
     try { return jsonResult(await core.probeStudyInternals({ entity_id })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
+
+  server.tool('data_get_study_plot_meta', "Return per-plot metadata [{index, id, type, title, isHidden}] for a study from its metaInfo — including alertcondition/chars outputs (e.g. titles 'Local Bottom', 'Potential Bullish Reversal') NOT shown in the data window. `index` is the positional column in data_get_study_history rows, so a title maps deterministically to its raw column.", {
+    entity_id: z.string().describe('Study entity ID (from chart_get_state)'),
+  }, async ({ entity_id }) => {
+    try { return jsonResult(await core.getStudyPlotMeta({ entity_id })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
 }
