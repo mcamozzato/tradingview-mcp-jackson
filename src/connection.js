@@ -58,6 +58,17 @@ export async function connect() {
       await client.Page.enable();
       await client.DOM.enable();
 
+      // A pinned server proves it landed on its tab before serving a single read.
+      if (PINNED_CHART_ID) {
+        const href = (await client.Runtime.evaluate({ expression: 'location.href', returnByValue: true }))
+          ?.result?.value || '';
+        try {
+          selectChartTarget([{ type: 'page', url: href }], PINNED_CHART_ID);
+        } catch {
+          throw new Error(`pinned to ${PINNED_CHART_ID} but attached to ${href}`);
+        }
+      }
+
       return client;
     } catch (err) {
       lastError = err;
@@ -68,13 +79,46 @@ export async function connect() {
   throw new Error(`CDP connection failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
 }
 
+// TV_CHART_ID pins this server to ONE TradingView tab: the chart id in the tab's
+// URL, e.g. "C8wbh2oi" for https://www.tradingview.com/chart/C8wbh2oi/.
+//
+// Why: CDP's /json/list puts the most recently ACTIVATED page first, and the
+// unpinned rule takes the first chart page. So activating any other tab silently
+// re-points every NEW connection: a job that meant "the golden layout" reads
+// whatever tab someone last brought to the front. A pinned server attaches to its
+// tab or refuses. It never falls back to another one.
+const PINNED_CHART_ID = (process.env.TV_CHART_ID || '').trim() || null;
+
+const CHART_ID_RE = /^[A-Za-z0-9]{4,16}$/;
+
+export function selectChartTarget(targets, chartId = null) {
+  const pages = (targets || []).filter(t => t && t.type === 'page' && typeof t.url === 'string');
+  if (chartId) {
+    if (!CHART_ID_RE.test(chartId)) {
+      throw new Error(`TV_CHART_ID=${JSON.stringify(chartId)} is not a chart id (expected the `
+        + 'alphanumeric id from a tradingview.com/chart/<id>/ URL).');
+    }
+    const re = new RegExp(`tradingview\\.com/chart/${chartId}(?:[/?#]|$)`);
+    const hits = pages.filter(t => re.test(t.url));
+    if (hits.length === 1) return hits[0];
+    throw new Error(`TV_CHART_ID=${chartId}: expected exactly one open TradingView tab for this `
+      + `chart, found ${hits.length}. Open that layout's tab in TradingView Desktop. `
+      + 'Refusing to fall back to another tab.');
+  }
+  // Unpinned (legacy behaviour, unchanged): the first chart page in CDP's order.
+  return pages.find(t => /tradingview\.com\/chart/i.test(t.url))
+    || pages.find(t => /tradingview/i.test(t.url))
+    || null;
+}
+
+export function pinnedChartId() {
+  return PINNED_CHART_ID;
+}
+
 async function findChartTarget() {
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
-  // Prefer targets with tradingview.com/chart in the URL
-  return targets.find(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
-    || targets.find(t => t.type === 'page' && /tradingview/i.test(t.url))
-    || null;
+  return selectChartTarget(targets, PINNED_CHART_ID);
 }
 
 export async function getTargetInfo() {
