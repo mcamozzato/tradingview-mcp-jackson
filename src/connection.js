@@ -82,11 +82,12 @@ export async function connect() {
 // TV_CHART_ID pins this server to ONE TradingView tab: the chart id in the tab's
 // URL, e.g. "C8wbh2oi" for https://www.tradingview.com/chart/C8wbh2oi/.
 //
-// Why: CDP's /json/list puts the most recently ACTIVATED page first, and the
-// unpinned rule takes the first chart page. So activating any other tab silently
-// re-points every NEW connection: a job that meant "the golden layout" reads
-// whatever tab someone last brought to the front. A pinned server attaches to its
-// tab or refuses. It never falls back to another one.
+// Why: the unpinned rule takes the FIRST chart page in CDP's /json/list, and we
+// do not control that order. Observed 2026-09-29: after one session had attached
+// to and worked on a second tab, that tab was listed first. Activating the other
+// tab (/json/activate) did NOT move it back. So every NEW unpinned connection
+// silently read the wrong layout. A pinned server attaches to its tab or refuses.
+// It never falls back to another one.
 const PINNED_CHART_ID = (process.env.TV_CHART_ID || '').trim() || null;
 
 const CHART_ID_RE = /^[A-Za-z0-9]{4,16}$/;
