@@ -62,3 +62,4 @@ describe('selectChartTarget — unpinned (legacy, unchanged)', () => {
     assert.equal(selectChartTarget([]), null);
   });
 });
+

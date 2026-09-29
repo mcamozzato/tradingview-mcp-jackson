@@ -1,7 +1,7 @@
 /**
  * Core health/discovery/launch logic.
  */
-import { getClient, getTargetInfo, evaluate } from '../connection.js';
+import { getClient, getTargetInfo, evaluate, pinnedChartId } from '../connection.js';
 import { existsSync } from 'fs';
 import { execSync, spawn } from 'child_process';
 
@@ -34,6 +34,12 @@ export async function healthCheck() {
     cdp_connected: true,
     target_id: target.id,
     target_url: target.url,
+    // The page's LIVE address (target_url is the /json/list entry cached at attach)
+    // and the pin this server runs under. A caller that set TV_CHART_ID requires
+    // pinned_chart_id to echo it: a bridge that predates pinning omits the field,
+    // so it is refused whatever the tab order happens to be.
+    page_url: state?.url || null,
+    pinned_chart_id: pinnedChartId(),
     target_title: target.title,
     chart_symbol: state?.symbol || 'unknown',
     chart_resolution: state?.resolution || 'unknown',
