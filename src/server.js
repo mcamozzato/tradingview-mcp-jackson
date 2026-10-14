@@ -15,6 +15,8 @@ import { registerUiTools } from "./tools/ui.js";
 import { registerPaneTools } from "./tools/pane.js";
 import { registerTabTools } from "./tools/tab.js";
 import { registerMorningTools } from "./tools/morning.js";
+import { disconnect } from "./connection.js";
+import { exitWhenClientGone } from "./lifecycle.js";
 
 const server = new McpServer(
   {
@@ -99,3 +101,14 @@ process.stderr.write(
 // Start stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+// Exit when the client is gone, closing the CDP session first.
+exitWhenClientGone({
+  onGone: async (reason) => {
+    process.stderr.write(`tradingview-mcp: client gone (${reason}), exiting\n`);
+    const force = setTimeout(() => process.exit(0), 2000);
+    force.unref();
+    try { await disconnect(); } catch {}
+    process.exit(0);
+  },
+});
